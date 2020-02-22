@@ -445,6 +445,7 @@ def check_one_ideal_step(method):
     check_equal_histories(
         history,
         {
+            'x': [[10, 10, 10], [1, 2, 3]],  # correct x
             'func': [90.0, -7.0],
             'grad_norm': [13.928388277184119, 0.0],
             'time': [0, 1]  # dummy timestamps
@@ -529,7 +530,7 @@ def test_gd_1d():
     check_equal_histories(history, TRUE_HISTORY)
     # Constant step size.
     x_star, msg, history = optimization.gradient_descent(oracle, x0,
-                                                         max_iter=5, tolerance=1e-10, trace=False,
+                                                         max_iter=5, tolerance=1e-10, trace=True,
                                                          line_search_options={
                                                             'method': 'Constant',
                                                             'c': 1.0,
