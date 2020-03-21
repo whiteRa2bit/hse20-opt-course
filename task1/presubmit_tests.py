@@ -68,8 +68,11 @@ def check_log_reg(oracle_type, sparse=False):
 
     # Check at point x = [0, 0]
     x = np.zeros(2)
+    print(logreg.func(x))
     assert_almost_equal(logreg.func(x), 0.693147180)
+    print(logreg.grad(x))
     ok_(np.allclose(logreg.grad(x), [0, -0.25]))
+    print(logreg.hess(x))
     ok_(np.allclose(logreg.hess(x), [[0.625, 0.0625], [0.0625, 0.625]]))
     ok_(isinstance(logreg.grad(x), np.ndarray))
     ok_(isinstance(logreg.hess(x), np.ndarray))
@@ -519,12 +522,18 @@ def test_gd_1d():
         max_iter=5,
         tolerance=1e-10,
         trace=True,
+        display=False,
         line_search_options={
             'method': 'Armijo',
             'alpha_0': 100,
             'c1': 0.3,
         }
     )
+    print(msg)
+    print(history['x'])
+    print(history['func'])
+    print(history['grad_norm'])
+    print(history['time'])
     ok_(np.allclose(x_star, [-0.4077], atol=1e-3))
     eq_(msg, 'success')
     check_equal_histories(history, TRUE_HISTORY)
