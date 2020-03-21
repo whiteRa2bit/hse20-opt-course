@@ -87,15 +87,31 @@ class LogRegL2Oracle(BaseSmoothOracle):
 
     def func(self, x):
         # TODO: Implement
-        return None
+        m = len(self.b)
+        n = len(x)
+        output = -self.b * self.matvec_Ax(x)
+        losses = np.logaddexp(0, output)
+        reg_term = (self.regcoef/2) * np.linalg.norm(x)**2
+
+        return (losses @ np.ones(m) / m) + reg_term
 
     def grad(self, x):
         # TODO: Implement
-        return None
+        m = len(self.b)
+        residuals = scipy.special.expit(self.matvec_Ax(x)) - (self.b + 1)/2  # shape = (m, )
+        reg_term = self.regcoef * x
+
+        return (self.matvec_ATx(residuals) / m) + reg_term
 
     def hess(self, x):
         # TODO: Implement
-        return None
+        n = len(x)
+        m = len(self.b)
+        output = self.matvec_Ax(x)
+        diag_values = scipy.special.expit(output) * (1 - scipy.special.expit(output))
+        reg_term = self.regcoef * np.eye(n)
+
+        return self.matmat_ATsA(diag_values)/m + reg_term
 
 
 class LogRegL2OptimizedOracle(LogRegL2Oracle):
@@ -107,14 +123,132 @@ class LogRegL2OptimizedOracle(LogRegL2Oracle):
     """
     def __init__(self, matvec_Ax, matvec_ATx, matmat_ATsA, b, regcoef):
         super().__init__(matvec_Ax, matvec_ATx, matmat_ATsA, b, regcoef)
+        self.x = None
+        self.d = None
+        self.x_hat = None
+        self.Ax = None
+        self.Ad = None
+        self.Ax_hat = None
+
+    def _update_ax(self, x: np.array):
+        if np.all(x == self.x):
+            return
+        else:
+            self.x = x
+            self.Ax = self.matvec_Ax(x)
+
+    def _update_ad(self, d: np.array):
+        if np.all(d == self.d):
+            return
+        else:
+            self.d = d
+            self.Ad = self.matvec_Ax(self.d)
+
+    def _update_xhat(self, x: np.array, d: np.array, alpha: float):
+        if np.all(x + alpha * d == self.x_hat):
+            return
+        else:
+            self.x_hat = x + alpha * d
+            self.Ax_hat = self.Ax + alpha * self.Ad
+
+    def func(self, x: np.array):
+        # TODO: Implement
+        m = len(self.b)
+        n = len(x)
+
+        if np.all(self.x_hat == x):
+            output = -self.b * self.Ax_hat
+            losses = np.logaddexp(0, output)
+            reg_term = (self.regcoef / 2) * np.linalg.norm(x) ** 2
+
+            return (losses @ np.ones(m) / m) + reg_term
+
+        self._update_ax(x)
+
+        output = -self.b * self.Ax
+        losses = np.logaddexp(0, output)
+        reg_term = (self.regcoef/2) * np.linalg.norm(x)**2
+
+        return (losses @ np.ones(m) / m) + reg_term
+
+    def grad(self, x: np.array):
+        # TODO: Implement
+        m = len(self.b)
+
+        if np.all(self.x_hat == x):
+            residuals = scipy.special.expit(self.Ax_hat) - (self.b + 1) / 2  # shape = (m, )
+            reg_term = self.regcoef * self.x_hat
+
+            return (self.matvec_ATx(residuals) / m) + reg_term
+        else:
+            self._update_ax(x)
+
+            residuals = scipy.special.expit(self.Ax) - (self.b + 1)/2  # shape = (m, )
+            reg_term = self.regcoef * x
+
+            return (self.matvec_ATx(residuals) / m) + reg_term
+
+    def hess(self, x: np.array):
+        # TODO: Implement
+        n = len(x)
+        m = len(self.b)
+
+        if np.all(self.x_hat == x):
+            output = self.Ax_hat
+            diag_values = scipy.special.expit(output) * (1 - scipy.special.expit(output))
+            reg_term = self.regcoef * np.eye(n)
+
+            return self.matmat_ATsA(diag_values) / m + reg_term
+
+        else:
+            self._update_ax(x)
+            output = self.Ax
+            diag_values = scipy.special.expit(output) * (1 - scipy.special.expit(output))
+            reg_term = self.regcoef * np.eye(n)
+
+            return self.matmat_ATsA(diag_values)/m + reg_term
 
     def func_directional(self, x, d, alpha):
-        # TODO: Implement optimized version with pre-computation of Ax and Ad
-        return None
+        m = len(self.b)
+        n = len(x)
+
+        if alpha == 0:
+            return self.func(x)
+
+        if np.all(self.x_hat == x):
+            self.Ax = self.Ax_hat
+            self._update_ad(d)
+            self._update_xhat(x, d, alpha)
+        else:
+            self._update_ax(x)
+            self._update_ad(d)
+            self._update_xhat(x, d, alpha)
+
+        output = -self.b * (self.Ax + alpha*self.Ad)
+        losses = np.logaddexp(0, output)
+        reg_term = (self.regcoef/2) * np.linalg.norm(x+alpha*d)**2
+
+        return np.squeeze((losses @ np.ones(m) / m) + reg_term)
 
     def grad_directional(self, x, d, alpha):
-        # TODO: Implement optimized version with pre-computation of Ax and Ad
-        return None
+        m = len(self.b)
+
+        if alpha == 0:
+            return self.grad(x) @ d
+
+        if np.all(self.x_hat == x):
+            self.Ax = self.Ax_hat
+            self._update_ad(d)
+            self._update_xhat(x, d, alpha)
+        else:
+            self._update_ax(x)
+            self._update_ad(d)
+            self._update_xhat(x, d, alpha)
+
+        residuals = scipy.special.expit(self.Ax + alpha * self.Ad) - (self.b + 1) / 2
+        reg_term = self.regcoef * (x + alpha * d) @ d
+
+        return (np.transpose(residuals)@self.Ad / m) + reg_term
 
 
 def create_log_reg_oracle(A, b, regcoef, oracle_type='usual'):
@@ -124,15 +258,15 @@ def create_log_reg_oracle(A, b, regcoef, oracle_type='usual'):
     """
     def matvec_Ax(x):
         # TODO: implement proper matrix-vector multiplication
-        return x
+        return A @ x
 
     def matvec_ATx(x):
         # TODO: implement proper martix-vector multiplication
-        return x
+        return np.transpose(A) @ x
 
     def matmat_ATsA(s):
         # TODO: Implement
-        return None
+        return np.transpose(A) @ scipy.sparse.diags(s) @ A
 
     if oracle_type == 'usual':
         oracle = LogRegL2Oracle
@@ -152,7 +286,14 @@ def grad_finite_diff(func, x, eps=1e-8):
                           >> i <<
     """
     # TODO: Implement numerical estimation of the gradient
-    return None
+    result = np.zeros(len(x))
+
+    for i in range(len(x)):
+        e = np.zeros(len(x))
+        e[i] = 1
+        result[i] = (func(x + eps * e) - func(x)) / eps
+
+    return result
 
 
 def hess_finite_diff(func, x, eps=1e-5):
@@ -167,4 +308,14 @@ def hess_finite_diff(func, x, eps=1e-5):
                           >> i <<
     """
     # TODO: Implement numerical estimation of the Hessian
-    return None
+    result = np.zeros((len(x), len(x)))
+
+    for i in range(len(x)):
+        for j in range(len(x)):
+            ei = np.zeros(len(x))
+            ej = np.zeros(len(x))
+            ei[i] = 1
+            ej[j] = 1
+            result[i][j] = (func(x + eps * ei + eps * ej) - func(x + eps * ei) - func(x + eps * ej) + func(x)) / eps**2
+
+    return result

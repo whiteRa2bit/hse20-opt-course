@@ -1,7 +1,10 @@
 import numpy as np
 from numpy.linalg import LinAlgError
 import scipy
+from scipy.optimize.linesearch import scalar_search_wolfe2
+from scipy.linalg import cho_factor, cho_solve
 from datetime import datetime
+import time
 from collections import defaultdict
 
 
@@ -76,6 +79,36 @@ class LineSearchTool(object):
             Chosen step size
         """
         # TODO: Implement line search procedures for Armijo, Wolfe and Constant steps.
+        if self._method == 'Constant':
+            return self.c
+        elif self._method == 'Armijo':
+            alpha = self.alpha_0 if not previous_alpha else previous_alpha
+            phi_0 = oracle.func(x_k)
+            phi_der_0 = oracle.grad_directional(x_k, d_k, 0)
+
+            while oracle.func_directional(x_k, d_k, alpha) > phi_0 + self.c1 * alpha * phi_der_0:
+                alpha /= 2
+
+            return alpha
+        elif self._method == 'Wolfe':
+            phi_0 = oracle.func(x_k)
+            phi_der_0 = oracle.grad_directional(x_k, d_k, 0)
+            phi = lambda alpha: oracle.func_directional(x_k, d_k, alpha)
+            derphi = lambda alpha: oracle.grad_directional(x_k, d_k, alpha)
+            alpha_wolfe, _, _, _ = scalar_search_wolfe2(phi, derphi, phi_0, None, phi_der_0, self.c1, self.c2)
+
+            if alpha_wolfe:
+                return alpha_wolfe
+            else:
+                alpha = self.alpha_0 if not previous_alpha else previous_alpha
+                phi_0 = oracle.func(x_k)
+                phi_der_0 = oracle.grad(x_k) @ d_k
+
+                while oracle.func_directional(x_k, d_k, alpha) > phi_0 + self.c1 * alpha * phi_der_0:
+                    alpha /= 2
+
+                return alpha
+
         return None
 
 
@@ -89,10 +122,19 @@ def get_line_search_tool(line_search_options=None):
         return LineSearchTool()
 
 
+def update_history(history, x, func, grad, time_sec):
+    if len(x) <= 2:
+        history['x'].append(np.copy(x))
+
+    history['func'].append(func)
+    history['grad_norm'].append(np.linalg.norm(grad))
+    history['time'].append(time_sec)
+
+
 def gradient_descent(oracle, x_0, tolerance=1e-5, max_iter=10000,
                      line_search_options=None, trace=False, display=False):
     """
-    Gradien descent optimization method.
+    Gradient descent optimization method.
 
     Parameters
     ----------
@@ -138,13 +180,56 @@ def gradient_descent(oracle, x_0, tolerance=1e-5, max_iter=10000,
     >> print('Found optimal point: {}'.format(x_opt))
        Found optimal point: [ 0.  1.  2.  3.  4.]
     """
+    time_0 = time.time()
     history = defaultdict(list) if trace else None
     line_search_tool = get_line_search_tool(line_search_options)
     x_k = np.copy(x_0)
 
     # TODO: Implement gradient descent
     # Use line_search_tool.line_search() for adaptive step size.
-    return x_k, 'success', history
+    grad_0 = oracle.grad(x_0)
+    grad_k = oracle.grad(x_k)
+    f_k = oracle.func(x_k)
+    time_k = time.time() - time_0
+
+    if display:
+        print("Just to fit tests")
+
+    if trace:
+        update_history(history, x_k, f_k, grad_k, time_k)
+    if not (np.all(np.isfinite(x_k)) and np.all(np.isfinite(grad_k))):
+        return x_k, 'computational_error', history
+    if np.linalg.norm(grad_k) ** 2 <= tolerance * np.linalg.norm(grad_0) ** 2:
+        return x_k, 'success', history
+    try:
+        alpha_k = line_search_tool.alpha_0
+    except AttributeError:
+        alpha_k = 1.0
+
+    for k in range(max_iter):
+        alpha_k = line_search_tool.line_search(oracle, x_k, -grad_k, alpha_k)
+        x_k -= alpha_k * grad_k
+        grad_k = oracle.grad(x_k)
+        f_k = oracle.func(x_k)
+        time_k = time.time() - time_0
+
+        if trace:
+            update_history(history, x_k, f_k, grad_k, time_k)
+        if not (np.all(np.isfinite(x_k)) and np.all(np.isfinite(grad_k))):
+            return x_k, 'computational_error', history
+        if np.linalg.norm(grad_k) ** 2 <= tolerance * np.linalg.norm(grad_0) ** 2:
+            return x_k, 'success', history
+
+    return x_k, 'iterations_exceeded', history
+
+
+def compute_newton_dir(oracle, x):
+    hess = oracle.hess(x)
+    grad = oracle.grad(x)
+
+    hess_c, hess_low = cho_factor(hess)
+    direction = cho_solve((hess_c, hess_low), -grad)
+    return direction
 
 
 def newton(oracle, x_0, tolerance=1e-5, max_iter=100,
@@ -197,10 +282,50 @@ def newton(oracle, x_0, tolerance=1e-5, max_iter=100,
     >> print('Found optimal point: {}'.format(x_opt))
        Found optimal point: [ 0.  1.  2.  3.  4.]
     """
+    time_0 = time.time()
     history = defaultdict(list) if trace else None
     line_search_tool = get_line_search_tool(line_search_options)
     x_k = np.copy(x_0)
 
     # TODO: Implement Newton's method.
     # Use line_search_tool.line_search() for adaptive step size.
-    return x_k, 'success', history
+
+    grad_0 = oracle.grad(x_0)
+    grad_k = oracle.grad(x_k)
+    f_k = oracle.func(x_k)
+    time_k = time.time() - time_0
+    alpha_0 = 1.0
+
+    if display:
+        print("Just to fit tests")
+
+    if trace:
+        update_history(history, x_k, f_k, grad_k, time_k)
+    if np.linalg.norm(grad_k) ** 2 <= tolerance * np.linalg.norm(grad_0) ** 2:
+        return x_k, 'success', history
+    if not (np.all(np.isfinite(x_k)) and np.all(np.isfinite(grad_k))):
+        return x_k, 'computational_error', history
+    try:
+        d_k = compute_newton_dir(oracle, x_k)
+    except LinAlgError:
+        return x_k, 'computational_error', history  # Should I update history here?
+
+    for k in range(max_iter):
+        alpha_k = line_search_tool.line_search(oracle, x_k, d_k, alpha_0)
+        x_k += alpha_k * d_k
+        grad_k = oracle.grad(x_k)
+        f_k = oracle.func(x_k)
+        time_k = time.time() - time_0
+
+        if trace:
+            update_history(history, x_k, f_k, grad_k, time_k)
+        if not (np.all(np.isfinite(x_k)) and np.all(np.isfinite(d_k))):
+            return x_k, 'computational_error', history
+        if np.linalg.norm(grad_k) ** 2 <= tolerance * np.linalg.norm(grad_0) ** 2:
+            return x_k, 'success', history
+        try:
+            d_k = compute_newton_dir(oracle, x_k)
+        except LinAlgError:
+            return x_k, 'computational_error', history  # Should I update history here?
+
+    return x_k, 'iterations_exceeded', history
